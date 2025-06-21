@@ -8,6 +8,7 @@ pub enum OutBound {
 
 fn handle(mut stream: TcpStream, client_addr: SocketAddr) {
     let mut buf = [0; 65000];
+    let mut is_first = true;
 
     let readed = stream.read(&mut buf).unwrap();
 
@@ -101,14 +102,32 @@ fn handle(mut stream: TcpStream, client_addr: SocketAddr) {
                 return;
             }
 
-            stream.write_all(&buf[..readed]).unwrap();
-            println!(
-                "\n -- from net({}): {} -> {}: {:?}",
-                readed,
-                addr,
-                client_addr,
-                String::from_utf8_lossy(&buf[..readed])
-            );
+            if is_first {
+                let mut response = vec![0, 0];
+                response.extend_from_slice(&buf[..readed]);
+
+                stream.write_all(&response).unwrap();
+
+                is_first = false;
+
+                println!(
+                    "\n -- first from net({}): {} -> {}: {:?}",
+                    readed,
+                    addr,
+                    client_addr,
+                    String::from_utf8_lossy(&response)
+                );
+            } else {
+                stream.write_all(&buf[..readed]).unwrap();
+
+                println!(
+                    "\n -- from net({}): {} -> {}: {:?}",
+                    readed,
+                    addr,
+                    client_addr,
+                    String::from_utf8_lossy(&buf[..readed])
+                );
+            }
         }
 
         std::thread::yield_now();
