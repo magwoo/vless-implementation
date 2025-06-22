@@ -1,6 +1,10 @@
 use std::io::{ErrorKind, Read, Write};
 use std::net::{Ipv4Addr, SocketAddr, TcpListener, TcpStream, ToSocketAddrs, UdpSocket};
 
+mod header;
+mod stream;
+mod transport;
+
 pub enum OutBound {
     Udp(UdpSocket),
     Tcp(TcpStream),
@@ -46,7 +50,7 @@ fn handle(mut stream: TcpStream, client_addr: SocketAddr) {
             let domain = format!("{domain}:{port}");
             (1 + len, domain.to_socket_addrs().unwrap().next().unwrap())
         }
-        t => panic!("unknown addr type: {t}"),
+        t => panic!("unknown addr type: {t}, buf: {:?}", &buf[..readed]),
     };
     let payload = &buf[22 + extra_len + addr_len..readed];
 
