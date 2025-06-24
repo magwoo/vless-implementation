@@ -11,7 +11,7 @@ fn main() {
 
     while let Ok((stream, addr)) = listener.accept() {
         std::thread::spawn(move || {
-            let mut stream = Stream::from_incoming(stream).unwrap();
+            let mut stream = Stream::from_incoming(stream, addr).unwrap();
 
             println!("handled new stream: {}", addr);
 

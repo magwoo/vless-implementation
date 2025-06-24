@@ -1,7 +1,5 @@
-use std::{
-    io::{ErrorKind, Read, Write},
-    net::{SocketAddr, TcpStream, UdpSocket},
-};
+use std::io::{ErrorKind, Read, Write};
+use std::net::{SocketAddr, TcpStream, UdpSocket};
 
 use anyhow::Context;
 

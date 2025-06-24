@@ -1,7 +1,7 @@
 use anyhow::Context;
 use inbound::{tcp::TcpInBound, udp::UdpInBound};
 use outbound::{TcpOutBound, UdpOutBound};
-use std::net::TcpStream;
+use std::net::{SocketAddr, TcpStream};
 
 use self::inbound::InBound;
 use self::outbound::OutBound;
@@ -12,6 +12,7 @@ mod outbound;
 
 pub struct Stream {
     header: Header,
+    client_addr: SocketAddr,
     inbound: Box<dyn InBound>,
     outbound: Box<dyn OutBound>,
 }
@@ -21,7 +22,7 @@ impl Stream {
         &self.header
     }
 
-    pub fn from_incoming(mut stream: TcpStream) -> anyhow::Result<Self> {
+    pub fn from_incoming(mut stream: TcpStream, client_addr: SocketAddr) -> anyhow::Result<Self> {
         let header = Header::from_reader(&mut stream).context("failed to parse header")?;
 
         let inbound: Box<dyn InBound> = match header.cmd() {
@@ -43,6 +44,7 @@ impl Stream {
 
         Ok(Self {
             header,
+            client_addr,
             inbound,
             outbound,
         })
@@ -62,10 +64,11 @@ impl Stream {
                 }
 
                 println!(
-                    "{} -> {}: {:?}",
+                    "{} | {} -> {}: {} bytes",
                     self.header.cmd(),
+                    self.client_addr,
                     self.header.addr(),
-                    String::from_utf8_lossy(&buf[..readed])
+                    readed
                 );
 
                 self.outbound
@@ -83,10 +86,11 @@ impl Stream {
                 }
 
                 println!(
-                    "{} <- {}: {:?}",
+                    "{} | {} <- {}: {} bytes",
                     self.header.cmd(),
+                    self.client_addr,
                     self.header.addr(),
-                    String::from_utf8_lossy(&buf[..readed])
+                    readed
                 );
 
                 self.inbound
