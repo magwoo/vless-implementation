@@ -11,6 +11,8 @@ pub struct TcpInBound {
 
 impl TcpInBound {
     pub fn new(stream: TcpStream) -> Self {
+        stream.set_nonblocking(true).unwrap();
+
         Self {
             stream,
             is_first: true,
@@ -28,14 +30,16 @@ impl InBound for TcpInBound {
     }
 
     fn write(&mut self, buf: &[u8]) -> anyhow::Result<()> {
-        if !self.is_first {
-            self.stream.write_all(buf)
-        } else {
-            let mut new_buf = vec![0; buf.len() + 2];
+        if self.is_first {
+            let mut new_buf = Vec::with_capacity(buf.len() + 2);
             new_buf.extend_from_slice(&[0, 0]);
-            new_buf.extend_from_slice(&buf);
+            new_buf.extend_from_slice(buf);
+
+            self.is_first = false;
 
             self.stream.write_all(&new_buf)
+        } else {
+            self.stream.write_all(buf)
         }
         .context("failed to write to stream")
     }

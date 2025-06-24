@@ -1,9 +1,7 @@
-use std::io::BufReader;
-use std::net::TcpStream;
-
 use anyhow::Context;
 use inbound::{tcp::TcpInBound, udp::UdpInBound};
 use outbound::{TcpOutBound, UdpOutBound};
+use std::net::TcpStream;
 
 use self::inbound::InBound;
 use self::outbound::OutBound;
@@ -19,14 +17,16 @@ pub struct Stream {
 }
 
 impl Stream {
-    pub fn from_incoming(stream: TcpStream) -> anyhow::Result<Self> {
-        let mut reader = BufReader::new(stream);
+    pub fn header(&self) -> &Header {
+        &self.header
+    }
 
-        let header = Header::from_reader(&mut reader).context("failed to parse header")?;
+    pub fn from_incoming(mut stream: TcpStream) -> anyhow::Result<Self> {
+        let header = Header::from_reader(&mut stream).context("failed to parse header")?;
 
         let inbound: Box<dyn InBound> = match header.cmd() {
-            Cmd::Tcp => Box::new(TcpInBound::new(reader.into_inner())),
-            Cmd::Udp => Box::new(UdpInBound::new(reader.into_inner())),
+            Cmd::Tcp => Box::new(TcpInBound::new(stream)),
+            Cmd::Udp => Box::new(UdpInBound::new(stream)),
         };
 
         let addr = header.addr();
@@ -48,7 +48,51 @@ impl Stream {
         })
     }
 
-    pub fn process() {
-        unimplemented!()
+    pub fn event_loop(&mut self) -> anyhow::Result<()> {
+        let mut buf = [0; u16::MAX as usize];
+
+        loop {
+            if let Some(readed) = self
+                .inbound
+                .read(&mut buf)
+                .context("failed to read from inbound")?
+            {
+                if readed == 0 {
+                    return Ok(());
+                }
+
+                println!(
+                    "{} -> {}: {:?}",
+                    self.header.cmd(),
+                    self.header.addr(),
+                    String::from_utf8_lossy(&buf[..readed])
+                );
+
+                self.outbound
+                    .write(&buf[..readed])
+                    .context("failed to write to outbound")?;
+            }
+
+            if let Some(readed) = self
+                .outbound
+                .read(&mut buf)
+                .context("failed to read from outbound")?
+            {
+                if readed == 0 {
+                    return Ok(());
+                }
+
+                println!(
+                    "{} <- {}: {:?}",
+                    self.header.cmd(),
+                    self.header.addr(),
+                    String::from_utf8_lossy(&buf[..readed])
+                );
+
+                self.inbound
+                    .write(&buf[..readed])
+                    .context("failed to write to inbound")?;
+            }
+        }
     }
 }

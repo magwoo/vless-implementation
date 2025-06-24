@@ -5,6 +5,8 @@ use std::net::TcpStream;
 
 use super::InBound;
 
+const MAX_BUFFER_SIZE: usize = u16::MAX as usize;
+
 pub struct UdpInBound {
     stream: TcpStream,
     buffer: VecDeque<u8>,
@@ -12,6 +14,8 @@ pub struct UdpInBound {
 
 impl UdpInBound {
     pub fn new(stream: TcpStream) -> Self {
+        stream.set_nonblocking(true).unwrap();
+
         Self {
             stream,
             buffer: VecDeque::default(),
@@ -30,6 +34,11 @@ impl InBound for UdpInBound {
         };
 
         if readed > 0 {
+            if self.buffer.len() > MAX_BUFFER_SIZE {
+                self.buffer.clear();
+                anyhow::bail!("Buffer overflow");
+            }
+
             self.buffer.extend(&stream_buf[..readed]);
         }
 
@@ -59,7 +68,7 @@ impl InBound for UdpInBound {
     fn write(&mut self, buf: &[u8]) -> anyhow::Result<()> {
         let len_bytes = (buf.len() as u16).to_be_bytes();
 
-        let mut buf_with_len = vec![0; buf.len() + 2];
+        let mut buf_with_len = Vec::with_capacity(buf.len() + len_bytes.len());
         buf_with_len.extend_from_slice(&len_bytes);
         buf_with_len.extend_from_slice(buf);
 

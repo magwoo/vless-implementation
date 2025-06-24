@@ -1,3 +1,4 @@
+use std::fmt::Display;
 use std::io::Read;
 use std::net::{SocketAddr, ToSocketAddrs};
 
@@ -113,6 +114,15 @@ impl TryFrom<u8> for Cmd {
             1 => Ok(Self::Tcp),
             2 => Ok(Self::Udp),
             other => anyhow::bail!("unknown value: {}", other),
+        }
+    }
+}
+
+impl Display for Cmd {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Tcp => write!(f, "TCP"),
+            Self::Udp => write!(f, "UDP"),
         }
     }
 }
