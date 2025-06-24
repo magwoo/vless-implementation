@@ -10,6 +10,7 @@ const MAX_BUFFER_SIZE: usize = u16::MAX as usize;
 pub struct UdpInBound {
     stream: TcpStream,
     buffer: VecDeque<u8>,
+    is_first: bool,
 }
 
 impl UdpInBound {
@@ -19,6 +20,7 @@ impl UdpInBound {
         Self {
             stream,
             buffer: VecDeque::default(),
+            is_first: true,
         }
     }
 }
@@ -68,12 +70,26 @@ impl InBound for UdpInBound {
     fn write(&mut self, buf: &[u8]) -> anyhow::Result<()> {
         let len_bytes = (buf.len() as u16).to_be_bytes();
 
-        let mut buf_with_len = Vec::with_capacity(buf.len() + len_bytes.len());
-        buf_with_len.extend_from_slice(&len_bytes);
-        buf_with_len.extend_from_slice(buf);
+        let buf = match self.is_first {
+            true => {
+                self.is_first = false;
+
+                let mut new_buf = Vec::with_capacity(buf.len() + len_bytes.len() + 2);
+                new_buf.extend_from_slice(&[0, 0]);
+                new_buf.extend_from_slice(&len_bytes);
+                new_buf.extend_from_slice(buf);
+                new_buf
+            }
+            false => {
+                let mut new_buf = Vec::with_capacity(buf.len() + len_bytes.len());
+                new_buf.extend_from_slice(&len_bytes);
+                new_buf.extend_from_slice(buf);
+                new_buf
+            }
+        };
 
         self.stream
-            .write_all(&buf_with_len)
+            .write_all(&buf)
             .context("failed to write to stream")?;
 
         Ok(())
