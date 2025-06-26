@@ -39,14 +39,4 @@ async fn main() -> anyhow::Result<()> {
             println!("stream closed: {}", addr)
         });
     }
-
-    // while let Ok((stream, addr)) = listener.accept().await {
-    //     std::thread::spawn(move || {
-    //         let mut stream = Stream::from_incoming(stream, addr).unwrap();
-
-    //         println!("handled new stream: {}", addr);
-
-    //         stream.event_loop().unwrap();
-    //     });
-    // }
 }
