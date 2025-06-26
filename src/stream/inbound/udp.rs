@@ -1,11 +1,9 @@
-use anyhow::Context;
 use std::collections::VecDeque;
-use std::io::{BufRead, ErrorKind, Read, Write};
-use std::net::TcpStream;
-
-use super::InBound;
-
-const MAX_BUFFER_SIZE: usize = u16::MAX as usize;
+use std::io::{BufRead, Read};
+use std::pin::Pin;
+use std::task::Poll;
+use tokio::io::{AsyncRead, AsyncWrite, ReadBuf};
+use tokio::net::TcpStream;
 
 pub struct UdpInBound {
     stream: TcpStream,
@@ -15,8 +13,6 @@ pub struct UdpInBound {
 
 impl UdpInBound {
     pub fn new(stream: TcpStream) -> Self {
-        stream.set_nonblocking(true).unwrap();
-
         Self {
             stream,
             buffer: VecDeque::default(),
@@ -25,27 +21,27 @@ impl UdpInBound {
     }
 }
 
-impl InBound for UdpInBound {
-    fn read(&mut self, buf: &mut [u8]) -> anyhow::Result<Option<usize>> {
-        let mut stream_buf = [0; 2048];
+impl AsyncRead for UdpInBound {
+    fn poll_read(
+        mut self: Pin<&mut Self>,
+        cx: &mut std::task::Context<'_>,
+        buf: &mut ReadBuf<'_>,
+    ) -> Poll<std::io::Result<()>> {
+        let mut tmp_buf = [0; 1024];
+        let mut read_buf = ReadBuf::new(&mut tmp_buf);
 
-        let readed = match self.stream.read(&mut stream_buf) {
-            Ok(readed) => readed,
-            Err(err) if err.kind() == ErrorKind::WouldBlock => 0,
-            Err(err) => anyhow::bail!("failed to read from stream: {err:?}"),
-        };
-
-        if readed > 0 {
-            if self.buffer.len() > MAX_BUFFER_SIZE {
-                self.buffer.clear();
-                anyhow::bail!("Buffer overflow");
+        match Pin::new(&mut self.stream).poll_read(cx, &mut read_buf) {
+            Poll::Pending => {}
+            Poll::Ready(Ok(())) => {
+                self.buffer.extend(read_buf.filled());
             }
-
-            self.buffer.extend(&stream_buf[..readed]);
+            Poll::Ready(Err(err)) => return Poll::Ready(Err(std::io::Error::other(err))),
         }
 
-        if self.buffer.len() <= 2 {
-            return Ok(None);
+        if self.buffer.len() < 2 {
+            let _ = self.stream.poll_read_ready(cx);
+
+            return Poll::Pending;
         }
 
         let mut len_bytes = self.buffer.iter().take(2);
@@ -53,45 +49,59 @@ impl InBound for UdpInBound {
             u16::from_be_bytes([*len_bytes.next().unwrap(), *len_bytes.next().unwrap()]) as usize;
 
         if self.buffer.len() < data_len + 2 {
-            return Ok(None);
+            let _ = self.stream.poll_read_ready(cx);
+
+            return Poll::Pending;
         }
 
         self.buffer.consume(2);
 
-        let data_buf = &mut buf[..data_len];
+        let read_buf = &mut buf.initialize_unfilled()[..data_len];
 
-        self.buffer
-            .read_exact(data_buf)
-            .context("failed to read data from buffer")?;
+        self.buffer.read_exact(read_buf)?;
 
-        Ok(Some(data_len))
+        buf.advance(data_len);
+
+        Poll::Ready(Ok(()))
+    }
+}
+
+impl AsyncWrite for UdpInBound {
+    fn poll_write(
+        mut self: Pin<&mut Self>,
+        cx: &mut std::task::Context<'_>,
+        buf: &[u8],
+    ) -> Poll<Result<usize, std::io::Error>> {
+        let mut write_buf = Vec::with_capacity(buf.len() + 4);
+
+        if self.is_first {
+            write_buf.extend(&[0, 0]);
+        }
+
+        write_buf.extend((buf.len() as u16).to_be_bytes());
+        write_buf.extend(buf);
+
+        match Pin::new(&mut self.stream).poll_write(cx, &write_buf) {
+            Poll::Ready(Ok(writed)) => {
+                self.is_first = false;
+                Poll::Ready(Ok(writed))
+            }
+            Poll::Ready(Err(err)) => Poll::Ready(Err(std::io::Error::other(err))),
+            Poll::Pending => Poll::Pending,
+        }
     }
 
-    fn write(&mut self, buf: &[u8]) -> anyhow::Result<()> {
-        let len_bytes = (buf.len() as u16).to_be_bytes();
+    fn poll_flush(
+        self: Pin<&mut Self>,
+        _cx: &mut std::task::Context<'_>,
+    ) -> Poll<Result<(), std::io::Error>> {
+        Poll::Ready(Ok(()))
+    }
 
-        let buf = match self.is_first {
-            true => {
-                self.is_first = false;
-
-                let mut new_buf = Vec::with_capacity(buf.len() + len_bytes.len() + 2);
-                new_buf.extend_from_slice(&[0, 0]);
-                new_buf.extend_from_slice(&len_bytes);
-                new_buf.extend_from_slice(buf);
-                new_buf
-            }
-            false => {
-                let mut new_buf = Vec::with_capacity(buf.len() + len_bytes.len());
-                new_buf.extend_from_slice(&len_bytes);
-                new_buf.extend_from_slice(buf);
-                new_buf
-            }
-        };
-
-        self.stream
-            .write_all(&buf)
-            .context("failed to write to stream")?;
-
-        Ok(())
+    fn poll_shutdown(
+        mut self: Pin<&mut Self>,
+        cx: &mut std::task::Context<'_>,
+    ) -> Poll<Result<(), std::io::Error>> {
+        Pin::new(&mut self.stream).poll_shutdown(cx)
     }
 }

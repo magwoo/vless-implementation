@@ -1,8 +1,7 @@
-use std::fmt::Display;
-use std::io::Read;
-use std::net::{SocketAddr, ToSocketAddrs};
-
 use anyhow::Context;
+use std::fmt::Display;
+use std::net::{SocketAddr, ToSocketAddrs};
+use tokio::io::{AsyncRead, AsyncReadExt};
 
 #[derive(Clone, Copy)]
 pub enum Cmd {
@@ -10,6 +9,7 @@ pub enum Cmd {
     Udp,
 }
 
+#[derive(Clone)]
 pub struct Header {
     version: u8,
     uuid: [u8; 16],
@@ -34,10 +34,11 @@ impl Header {
         &self.addr
     }
 
-    pub fn from_reader(reader: &mut impl Read) -> anyhow::Result<Self> {
+    pub async fn from_reader<R: AsyncRead + Unpin>(reader: &mut R) -> anyhow::Result<Self> {
         let mut client_part_buf = [0; 18];
         reader
             .read_exact(&mut client_part_buf)
+            .await
             .context("failed to read client part")?;
 
         let version = client_part_buf[0];
@@ -54,12 +55,14 @@ impl Header {
             let mut options_buf = vec![0; opt_len as usize];
             reader
                 .read_exact(&mut options_buf)
+                .await
                 .context("failed to read options")?;
         }
 
         let mut addr_part_buf = [0; 4];
         reader
             .read_exact(&mut addr_part_buf)
+            .await
             .context("failed to read addr part")?;
 
         let cmd = Cmd::try_from(addr_part_buf[0]).context("failed to parse cmd")?;
@@ -71,19 +74,21 @@ impl Header {
                 let mut ip_buf = [0; 4];
                 reader
                     .read_exact(&mut ip_buf)
+                    .await
                     .context("failed to read ip addr")?;
 
                 SocketAddr::new(ip_buf.into(), port)
             }
             2 => {
-                let mut len_buf = [0; 1];
-                reader
-                    .read_exact(&mut len_buf)
+                let len_buf = reader
+                    .read_u8()
+                    .await
                     .context("failed to read domain len")?;
 
-                let mut domain_buf = vec![0; len_buf[0] as usize];
+                let mut domain_buf = vec![0; len_buf as usize];
                 reader
                     .read_exact(&mut domain_buf)
+                    .await
                     .context("failed to read domain")?;
 
                 let domain = String::from_utf8_lossy(&domain_buf);

@@ -1,46 +1,67 @@
-use anyhow::Context;
-use std::io::{ErrorKind, Read, Write};
-use std::net::TcpStream;
-
-use super::InBound;
+use std::pin::Pin;
+use std::task::Poll;
+use tokio::io::{AsyncRead, AsyncWrite, ReadBuf};
+use tokio::net::TcpStream;
 
 pub struct TcpInBound {
     stream: TcpStream,
     is_first: bool,
 }
 
+impl AsyncRead for TcpInBound {
+    fn poll_read(
+        mut self: Pin<&mut Self>,
+        cx: &mut std::task::Context<'_>,
+        buf: &mut ReadBuf<'_>,
+    ) -> Poll<std::io::Result<()>> {
+        Pin::new(&mut self.stream).poll_read(cx, buf)
+    }
+}
+
+impl AsyncWrite for TcpInBound {
+    fn poll_write(
+        mut self: Pin<&mut Self>,
+        cx: &mut std::task::Context<'_>,
+        buf: &[u8],
+    ) -> Poll<Result<usize, std::io::Error>> {
+        if self.is_first {
+            let mut write_buf = Vec::with_capacity(buf.len() + 2);
+            write_buf.extend(&[0, 0]);
+            write_buf.extend(buf);
+
+            match Pin::new(&mut self.stream).poll_write(cx, &write_buf) {
+                Poll::Ready(Ok(writed)) => {
+                    self.is_first = false;
+                    Poll::Ready(Ok(writed - 2))
+                }
+                Poll::Ready(Err(err)) => Poll::Ready(Err(std::io::Error::other(err))),
+                Poll::Pending => Poll::Pending,
+            }
+        } else {
+            Pin::new(&mut self.stream).poll_write(cx, buf)
+        }
+    }
+
+    fn poll_flush(
+        self: Pin<&mut Self>,
+        _cx: &mut std::task::Context<'_>,
+    ) -> Poll<Result<(), std::io::Error>> {
+        Poll::Ready(Ok(()))
+    }
+
+    fn poll_shutdown(
+        mut self: Pin<&mut Self>,
+        cx: &mut std::task::Context<'_>,
+    ) -> Poll<Result<(), std::io::Error>> {
+        Pin::new(&mut self.stream).poll_shutdown(cx)
+    }
+}
+
 impl TcpInBound {
     pub fn new(stream: TcpStream) -> Self {
-        stream.set_nonblocking(true).unwrap();
-
         Self {
             stream,
             is_first: true,
         }
-    }
-}
-
-impl InBound for TcpInBound {
-    fn read(&mut self, buf: &mut [u8]) -> anyhow::Result<Option<usize>> {
-        match self.stream.read(buf) {
-            Ok(readed) => Ok(Some(readed)),
-            Err(err) if err.kind() == ErrorKind::WouldBlock => Ok(None),
-            Err(err) => anyhow::bail!("failed to read stream: {err:?}"),
-        }
-    }
-
-    fn write(&mut self, buf: &[u8]) -> anyhow::Result<()> {
-        if self.is_first {
-            let mut new_buf = Vec::with_capacity(buf.len() + 2);
-            new_buf.extend_from_slice(&[0, 0]);
-            new_buf.extend_from_slice(buf);
-
-            self.is_first = false;
-
-            self.stream.write_all(&new_buf)
-        } else {
-            self.stream.write_all(buf)
-        }
-        .context("failed to write to stream")
     }
 }

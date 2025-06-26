@@ -1,75 +1,71 @@
-use std::io::{ErrorKind, Read, Write};
-use std::net::{SocketAddr, TcpStream, UdpSocket};
+use std::net::SocketAddr;
+use std::pin::Pin;
 
-use anyhow::Context;
+use tokio::io::{AsyncRead, AsyncWrite};
 
-pub trait OutBound {
-    fn read(&mut self, buf: &mut [u8]) -> anyhow::Result<Option<usize>>;
+use self::tcp::TcpOutBound;
+use self::udp::UdpOutBound;
+use crate::header::Cmd;
 
-    fn write(&mut self, buf: &[u8]) -> anyhow::Result<()>;
+pub mod tcp;
+pub mod udp;
+
+pub enum OutBound {
+    Tcp(TcpOutBound),
+    Udp(UdpOutBound),
 }
 
-pub struct TcpOutBound {
-    stream: TcpStream,
-}
-
-pub struct UdpOutBound {
-    socket: UdpSocket,
-}
-
-impl TcpOutBound {
-    pub fn new(addr: &SocketAddr) -> anyhow::Result<Self> {
-        let stream = TcpStream::connect(addr).context("failed to stream connect")?;
-
-        stream
-            .set_nonblocking(true)
-            .context("failed to set nonblocking")?;
-
-        Ok(Self { stream })
+impl OutBound {
+    pub async fn new(addr: &SocketAddr, cmd: Cmd) -> anyhow::Result<Self> {
+        Ok(match cmd {
+            Cmd::Tcp => Self::Tcp(TcpOutBound::new(addr).await?),
+            Cmd::Udp => Self::Udp(UdpOutBound::new(addr).await?),
+        })
     }
 }
 
-impl UdpOutBound {
-    pub fn new(addr: &SocketAddr) -> anyhow::Result<Self> {
-        let socket = UdpSocket::bind("0.0.0.0:0").context("failed to bind socket")?;
-
-        socket.connect(addr).context("failed to socket connect")?;
-        socket
-            .set_nonblocking(true)
-            .context("failed to set nonblocking")?;
-
-        Ok(Self { socket })
+impl AsyncRead for OutBound {
+    fn poll_read(
+        mut self: std::pin::Pin<&mut Self>,
+        cx: &mut std::task::Context<'_>,
+        buf: &mut tokio::io::ReadBuf<'_>,
+    ) -> std::task::Poll<std::io::Result<()>> {
+        match *self {
+            Self::Tcp(ref mut stream) => Pin::new(stream).poll_read(cx, buf),
+            Self::Udp(ref mut socket) => Pin::new(socket).poll_read(cx, buf),
+        }
     }
 }
 
-impl OutBound for TcpOutBound {
-    fn read(&mut self, buf: &mut [u8]) -> anyhow::Result<Option<usize>> {
-        match self.stream.read(buf) {
-            Ok(readed) => Ok(Some(readed)),
-            Err(err) if err.kind() == ErrorKind::WouldBlock => Ok(None),
-            Err(err) => anyhow::bail!("failed to read stream: {err:?}"),
+impl AsyncWrite for OutBound {
+    fn poll_write(
+        mut self: Pin<&mut Self>,
+        cx: &mut std::task::Context<'_>,
+        buf: &[u8],
+    ) -> std::task::Poll<Result<usize, std::io::Error>> {
+        match *self {
+            Self::Tcp(ref mut stream) => Pin::new(stream).poll_write(cx, buf),
+            Self::Udp(ref mut socket) => Pin::new(socket).poll_write(cx, buf),
         }
     }
 
-    fn write(&mut self, buf: &[u8]) -> anyhow::Result<()> {
-        self.stream
-            .write_all(buf)
-            .context("failed to write to stream")
-    }
-}
-
-impl OutBound for UdpOutBound {
-    fn read(&mut self, buf: &mut [u8]) -> anyhow::Result<Option<usize>> {
-        match self.socket.recv(buf) {
-            Ok(readed) => Ok(Some(readed)),
-            Err(err) if err.kind() == ErrorKind::WouldBlock => Ok(None),
-            Err(err) => anyhow::bail!("failed to recv from socket: {err:?}"),
+    fn poll_flush(
+        mut self: Pin<&mut Self>,
+        cx: &mut std::task::Context<'_>,
+    ) -> std::task::Poll<Result<(), std::io::Error>> {
+        match *self {
+            Self::Tcp(ref mut stream) => Pin::new(stream).poll_flush(cx),
+            Self::Udp(ref mut socket) => Pin::new(socket).poll_flush(cx),
         }
     }
 
-    fn write(&mut self, buf: &[u8]) -> anyhow::Result<()> {
-        self.socket.send(buf).context("failed to send to socket")?;
-
-        Ok(())
+    fn poll_shutdown(
+        mut self: Pin<&mut Self>,
+        cx: &mut std::task::Context<'_>,
+    ) -> std::task::Poll<Result<(), std::io::Error>> {
+        match *self {
+            Self::Tcp(ref mut stream) => Pin::new(stream).poll_shutdown(cx),
+            Self::Udp(ref mut socket) => Pin::new(socket).poll_shutdown(cx),
+        }
     }
 }
