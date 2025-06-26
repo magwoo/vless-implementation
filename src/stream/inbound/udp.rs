@@ -8,6 +8,8 @@ use tokio::net::TcpStream;
 pub struct UdpInBound {
     stream: TcpStream,
     buffer: VecDeque<u8>,
+    read_buf: [u8; 1024],
+    write_buf: Vec<u8>,
     is_first: bool,
 }
 
@@ -16,6 +18,8 @@ impl UdpInBound {
         Self {
             stream,
             buffer: VecDeque::default(),
+            read_buf: [0; 1024],
+            write_buf: Vec::default(),
             is_first: true,
         }
     }
@@ -27,20 +31,24 @@ impl AsyncRead for UdpInBound {
         cx: &mut std::task::Context<'_>,
         buf: &mut ReadBuf<'_>,
     ) -> Poll<std::io::Result<()>> {
-        let mut tmp_buf = [0; 1024];
-        let mut read_buf = ReadBuf::new(&mut tmp_buf);
+        let Self {
+            stream,
+            buffer,
+            read_buf,
+            ..
+        } = &mut *self;
 
-        match Pin::new(&mut self.stream).poll_read(cx, &mut read_buf) {
+        let mut read_buf = ReadBuf::new(read_buf);
+
+        match Pin::new(stream).poll_read(cx, &mut read_buf) {
             Poll::Pending => {}
             Poll::Ready(Ok(())) => {
-                self.buffer.extend(read_buf.filled());
+                buffer.extend(read_buf.filled());
             }
             Poll::Ready(Err(err)) => return Poll::Ready(Err(std::io::Error::other(err))),
         }
 
         if self.buffer.len() < 2 {
-            let _ = self.stream.poll_read_ready(cx);
-
             return Poll::Pending;
         }
 
@@ -49,8 +57,6 @@ impl AsyncRead for UdpInBound {
             u16::from_be_bytes([*len_bytes.next().unwrap(), *len_bytes.next().unwrap()]) as usize;
 
         if self.buffer.len() < data_len + 2 {
-            let _ = self.stream.poll_read_ready(cx);
-
             return Poll::Pending;
         }
 
@@ -72,19 +78,29 @@ impl AsyncWrite for UdpInBound {
         cx: &mut std::task::Context<'_>,
         buf: &[u8],
     ) -> Poll<Result<usize, std::io::Error>> {
-        let mut write_buf = Vec::with_capacity(buf.len() + 4);
+        self.write_buf.clear();
 
-        if self.is_first {
+        let Self {
+            stream,
+            write_buf,
+            is_first,
+            ..
+        } = &mut *self;
+
+        if *is_first {
             write_buf.extend(&[0, 0]);
         }
 
         write_buf.extend((buf.len() as u16).to_be_bytes());
         write_buf.extend(buf);
 
-        match Pin::new(&mut self.stream).poll_write(cx, &write_buf) {
-            Poll::Ready(Ok(writed)) => {
-                self.is_first = false;
-                Poll::Ready(Ok(writed))
+        match Pin::new(stream).poll_write(cx, write_buf) {
+            Poll::Ready(Ok(mut writed)) => {
+                if self.is_first {
+                    writed -= 2;
+                    self.is_first = false;
+                }
+                Poll::Ready(Ok(writed - 2))
             }
             Poll::Ready(Err(err)) => Poll::Ready(Err(std::io::Error::other(err))),
             Poll::Pending => Poll::Pending,
