@@ -22,12 +22,6 @@ async fn main() -> anyhow::Result<()> {
         println!("handled new stream: {}", addr);
 
         tokio::spawn(async move {
-            let mut buf = [0; 65000];
-
-            let readed = stream.peek(&mut buf).await.unwrap();
-
-            println!("readed: {:?}", &buf[..readed]);
-
             let stream = match Stream::from_incoming(stream, addr).await {
                 Ok(stream) => stream,
                 Err(err) => {
